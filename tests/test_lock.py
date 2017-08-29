@@ -1,8 +1,6 @@
 from redlock import RedLock, ReentrantRedLock, RedLockError
 from redlock.lock import CLOCK_DRIFT_FACTOR
-import mock
 import time
-import unittest
 
 
 def test_default_connection_details_value():
@@ -33,6 +31,7 @@ def test_lock_with_validity():
     lock.release()
     assert locked == True
     assert 0 < validity < ttl - ttl * CLOCK_DRIFT_FACTOR - 2
+
 
 def test_from_url():
     """
@@ -100,57 +99,81 @@ def test_lock_expire():
     assert locked == False
 
 
-class TestLock(unittest.TestCase):
-    def setUp(self):
-        super(TestLock, self).setUp()
-        self.redlock = mock.patch.object(RedLock, '__init__', return_value=None).start()
-        self.redlock_acquire = mock.patch.object(RedLock, 'acquire').start()
-        self.redlock_release = mock.patch.object(RedLock, 'release').start()
-        self.redlock_acquire.return_value = True
+def test_lock_extend():
+    test_lock = RedLock("test_lock_extend", ttl=2000)
+    test_lock.acquire()
+    time.sleep(1)
+    test_lock.extend()
+    time.sleep(1.5)
+    assert test_lock.check() == True
 
-    def tearDown(self):
-        mock.patch.stopall()
 
-    def test_passthrough(self):
-        test_lock = ReentrantRedLock('')
-        test_lock.acquire()
-        test_lock.release()
+def test_lock_check():
+    test_lock = RedLock("test_lock_check")
+    assert test_lock.check() == False
+    test_lock.acquire()
+    assert test_lock.check() == True
+    test_lock.release()
+    assert test_lock.check() == False
 
-        self.redlock.assert_called_once_with('')
-        self.redlock_acquire.assert_called_once_with()
-        self.redlock_release.assert_called_once_with()
 
-    def test_reentrant(self):
-        test_lock = ReentrantRedLock('')
-        test_lock.acquire()
-        test_lock.acquire()
-        test_lock.release()
-        test_lock.release()
+def test_lock_release_return():
+    test_lock = RedLock("test_lock_release_return")
+    test_lock.acquire()
+    assert test_lock.release() == True
 
-        self.redlock.assert_called_once_with('')
-        self.redlock_acquire.assert_called_once_with()
-        self.redlock_release.assert_called_once_with()
 
-    def test_reentrant_n(self):
-        test_lock = ReentrantRedLock('')
-        for _ in range(10):
-            test_lock.acquire()
-        for _ in range(10):
-            test_lock.release()
+def test_passthrough():
+    test_lock = ReentrantRedLock('test_reentrant_passthrough')
+    assert test_lock.acquire() == True
+    test_lock.release() == True
 
-        self.redlock.assert_called_once_with('')
-        self.redlock_acquire.assert_called_once_with()
-        self.redlock_release.assert_called_once_with()
 
-    def test_no_release(self):
-        test_lock = ReentrantRedLock('')
-        test_lock.acquire()
-        test_lock.acquire()
-        test_lock.release()
+def test_reentrant():
+    test_lock = ReentrantRedLock('test_reentrant')
+    assert test_lock.acquire() == True
+    assert test_lock.acquire() == True
+    assert test_lock.release() == None
+    assert test_lock.release() == True
 
-        self.redlock.assert_called_once_with('')
-        self.redlock_acquire.assert_called_once_with()
-        self.redlock_release.assert_not_called()
+
+def test_reentrant_n():
+    test_lock = ReentrantRedLock('test_reentrant_n')
+    for _ in range(10):
+        assert test_lock.acquire() == True
+    for _ in range(9):
+        assert test_lock.release() == None
+    assert test_lock.release() == True
+
+
+def test_reentrant_timeout():
+    test_lock = ReentrantRedLock('test_reentrant_timeout', ttl=5000)
+    assert test_lock.acquire() == True
+    time.sleep(6)
+    assert test_lock.acquire() == True
+    assert test_lock.release() == True
+
+
+def test_reentrant_acquire_and_extend():
+    test_lock = ReentrantRedLock("test_reentrant_acquire_and_extend", ttl=10000)
+    # Acquire the lock normally
+    assert test_lock.acquire() == True
+    # We can acquire/extend it
+    assert test_lock.acquire_and_extend() == True
+    # Let the lock time out
+    time.sleep(11)
+
+    # We can acquire/extend it off the bat
+    assert test_lock.acquire_and_extend() == True
+    # Acquire it normally again
+    assert test_lock.acquire() == True
+    # We can still acquire/extend it
+    assert test_lock.acquire_and_extend() == True
+    # We should have reentered the lock twice (since it timed out)
+    assert test_lock.release() == None
+    assert test_lock.release() == None
+    # And now we should actually be releasing the lock
+    assert test_lock.release() == True
 
 
 def test_lock_with_multi_backend():
